@@ -1,72 +1,166 @@
 # Create first network with Keras
 from keras.models import Sequential
+from keras.models import Model
 from keras.layers import Dense
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
+
+from keras.layers import Embedding
+from keras.layers import Dense
+from keras.layers import Input
+from keras.layers import Flatten
+
+from sklearn.metrics import (precision_score, recall_score, f1_score, accuracy_score)
 
 from keras.utils import np_utils
 
 import keras
 import numpy
 
+
 # fix random seed for reproducibility
 seed = 7
 numpy.random.seed(seed)
 
+LINE_SENTENCE_END = ""
+WINDOW_PADDING = 4
+SENTENCE_DELIMITER = "***"
+MAX_SEQUENCE_LENGTH = 2*WINDOW_PADDING+1
 
-def getFileLineArray2D( filePath ):
-    return numpy.genfromtxt(filePath,dtype='str')
+#IGNORABLE_WORDS = ["","-DOCSTART-"]
 
-def getWordArray1D( fileLineArray ):
-    return fileLineArray[:,0:1].ravel()
+def getFileLineList( filePath ):
+    return open(filePath,'r').read().splitlines()
 
-def getClassificationArray1D( fileLineArray ):
-    return fileLineArray[:,1].ravel()
+def getWordList( fileLineArray ):
+    words = list()
+    for i, s in enumerate(fileLineArray):
+        # pega a primeira palavra
+        if(len(fileLineArray[i].split())>1):
+            words.append(fileLineArray[i].split()[0])
+        else:
+            words.append(LINE_SENTENCE_END)
+    return words
 
-def chunks(l, n):
-    for i in xrange(0, len(l), n):
-        yield l[i:i + n]
+def getClassificationList( fileLineArray ):
+    classifications = list()
+    for i, s in enumerate(fileLineArray):
+        # pega ultima palavra
+        if(len(fileLineArray[i].rsplit(' ', 1))>1):
+            classifications.append(fileLineArray[i].rsplit(' ', 1)[1])
+        else:
+            classifications.append(LINE_SENTENCE_END)
+    return classifications
+
+def getInputChunks(wordList,clasificationsList):
+    chunks = list()
+    for i in range(0,len(wordList)):
+        chunk = list()
         
+        if wordList[i] != LINE_SENTENCE_END:
+            chunk.append(wordList[i])
+            for leftIndex in range(i-1,i-WINDOW_PADDING-1,-1):
+                if leftIndex < 0:
+                    chunk.insert(0,SENTENCE_DELIMITER)
+                elif wordList[leftIndex]==LINE_SENTENCE_END:
+                    for _ in range(leftIndex,i-WINDOW_PADDING-1,-1):
+                        chunk.insert(0,SENTENCE_DELIMITER)
+                    break
+                else:
+                    chunk.insert(0,wordList[leftIndex])
+
+            for rightIndex in range(i+1,i+WINDOW_PADDING+1):
+                if  rightIndex>len(wordList)-1 :
+                    chunk.append(SENTENCE_DELIMITER)
+                elif wordList[rightIndex]==LINE_SENTENCE_END:
+                    for _ in range(rightIndex,i+WINDOW_PADDING+1):
+                        chunk.append(SENTENCE_DELIMITER)
+                    break
+                else:
+                    chunk.append(wordList[rightIndex])
+            chunks.append([chunk,clasificationsList[i]])
+            
+    return chunks
+
+def getInputSequences(chunks,tokenizer):
+    
+    inputs = numpy.array(chunks)[:,0]
+    
+    inputSequences = list()
+    for i in range( 0,len(inputs)):
+        inputSequences.append(numpy.array(tokenizer.texts_to_sequences(inputs[i])).ravel().tolist())
+
+    return numpy.array(inputSequences)
+
+def getTargetSequences(chunks,targetTokenizer):
+    targets = numpy.array(chunks)[:,1]
+    targetSequences = targetTokenizer.texts_to_sequences(targets)    
+    targetSequences = numpy.array(targetSequences).flatten()
+    targetSequences = numpy.array(map(lambda x: x-1, targetSequences))
+    
+    return targetSequences
 
 languages = ["esp","ned"]
 
-arquivos = ["FileTestA","FileTestB","FileTrain"]
-
 #dicionário indexando os arquivos dos idiomas
 languageFileDictionary ={
-    'ned':{"FileTestA":"ned.testa","FileTestB":"ned.testb","FileTrain":"ned.train"},
-    'esp':{"FileTestA":"esp.testa","FileTestB":"esp.testb","FileTrain":"esp.train"}
-    }
-
-#neste exemplo obtemos o FileTestA de ned, recebemos apenas o nome do arquivo
-print languageFileDictionary['ned']['FileTestA']
-
-#Obtem o array 2d de linhas do arquivo
-#print getFileLineArray2D(languageFileDictionary['ned']['FileTestA'])
-
+    'ned':{"development":"ned.testa","test":"ned.testb","train":"ned.train"},
+    'esp':{"development":"esp.testa","test":"esp.testb","train":"esp.train"}}
 
 for language in languages:
+    
     print "-------"+language+"-------"
+    print ("Teste com uma janela de tamanho:%d"%(MAX_SEQUENCE_LENGTH))
     
-    tokenizer = Tokenizer()
-
-    fileTestA2D = getFileLineArray2D(languageFileDictionary[language]['FileTestA']);
-    fileWords1D = getWordArray1D(fileTestA2D)
-    fileClassification1D = getClassificationArray1D(fileTestA2D)
-
-    print fileWords1D
-
-    tokenizer.fit_on_texts(fileWords1D) # turn to 1D array
-    print('Encontrou %s palavras.' % len(tokenizer.word_index))
-
-    sequences2D = tokenizer.texts_to_sequences(fileWords1D)
+    fileTrain = getFileLineList(languageFileDictionary[language]['train']);
     
-    print sequences2D[0:10]
-    # remove todas as ocorrências de listas vazias que correspondem a pontuações e caracteres ignorados (util?)
-    while list() in sequences2D: sequences2D.remove(list()) 
-    print sequences2D[0:10]
-    #chunking
-    print list(chunks(numpy.squeeze(numpy.asarray(sequences2D)),3))[1]
+    words = getWordList(fileTrain)
+    targets = getClassificationList(fileTrain)
+    
+    inputTokenizer = Tokenizer(filters ="")
+    inputTokenizer.fit_on_texts(words)
+    inputTokenizer.fit_on_texts([SENTENCE_DELIMITER])
+    print('Encontrou %s palavras.' % len(inputTokenizer.word_index))
+    
+    chunks = getInputChunks(words,targets)
+    
+    inputSequences = getInputSequences(chunks,inputTokenizer)
+    
+    targetTokenizer = Tokenizer(filters="")
+    targetTokenizer.fit_on_texts(numpy.array(targets))
+    print('Encontrou %s classes.' % len(targetTokenizer.word_index))    
+    
+    targetSequences = getTargetSequences(chunks,targetTokenizer)
+    
+    model = Sequential()
+    model.add(Embedding(len(inputTokenizer.word_index) + 1, 500, input_length=MAX_SEQUENCE_LENGTH))
+    model.add(Flatten())
+    model.add(Dense(500, activation='relu'))
+    model.add(Dense(len(targetTokenizer.word_index), activation='softmax'))
 
-    embedding_matrix = tokenizer.texts_to_matrix(tokenizer.word_index)
-    print type(tokenizer.texts_to_matrix(tokenizer.word_index))
+    model.compile(loss='sparse_categorical_crossentropy', optimizer='rmsprop', metrics=['accuracy'])
+    
+    #TREINAMENTO
+    
+    model.fit(inputSequences, targetSequences, nb_epoch=3, batch_size=10)
+    
+    #TESTE
+    
+    fileTest = getFileLineList(languageFileDictionary[language]['test']);
+    
+    wordsTest = getWordList(fileTest)
+    targetsTest = getClassificationList(fileTest)
+    
+    chunksTest = getInputChunks(words,targets)
+
+    targetSequencesTest = getTargetSequences(chunks,targetTokenizer)
+    inputSequencesTest = getInputSequences(chunks,inputTokenizer)
+    
+    #model.fit(inputSequences, targetSequences,validation_data=(inputSequencesTest,inputSequencesTest) ,nb_epoch=1, batch_size=10)
+    
+    
+    print ">>TESTE<<"
+    scores = model.evaluate(targetSequencesTest, inputSequencesTest)
+    print("%s: %.2f%%" % (model.metrics_names[1], scores[1]*100))
+        
+    
