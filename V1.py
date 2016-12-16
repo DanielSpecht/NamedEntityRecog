@@ -33,6 +33,16 @@ MAX_SEQUENCE_LENGTH = 2*WINDOW_PADDING+1
 def getFileLineList( filePath ):
     return open(filePath,'r').read().splitlines()
 
+def getClassificationList( fileLineArray ):
+    classifications = list()
+    for i, s in enumerate(fileLineArray):
+        # pega ultima palavra
+        if(len(fileLineArray[i].rsplit(' ', 1))>1):
+            classifications.append(fileLineArray[i].rsplit(' ', 1)[1])
+        else:
+            classifications.append(LINE_SENTENCE_END)
+    return classifications
+
 def getWordList( fileLineArray ):
     words = list()
     for i, s in enumerate(fileLineArray):
@@ -56,6 +66,58 @@ def getTargetSequences(chunks,targetTokenizer):
     targetSequences = numpy.array(targetSequences).flatten()
     targetSequences = numpy.array(map(lambda x: x-1, targetSequences))   
     return targetSequences
+
+def getInputSequences(chunks,tokenizer):
+    
+    inputs = numpy.array(chunks)[:,0]
+    inputSequences = list()
+    for i in range( 0,len(inputs)):
+        inputInstance = tokenizer.texts_to_sequences(inputs[i])
+        inputInstance = numpy.array(inputInstance).ravel()
+        inputSequences.append(inputInstance)
+    return numpy.array(inputSequences)
+
+def getInputChunks(wordList,clasificationsList, inputTokenizer):
+    chunks = list()
+    for i in range(0,len(wordList)):
+        chunk = list()
+        
+        if wordList[i] != LINE_SENTENCE_END:
+            
+            if wordList[i] not in inputTokenizer.word_index:
+                chunk.append(UNKNOWN_WORD)
+            else:
+                chunk.append(wordList[i])
+            
+            for leftIndex in range(i-1,i-WINDOW_PADDING-1,-1):
+                if leftIndex < 0:
+                    chunk.insert(0,SENTENCE_DELIMITER)
+                elif wordList[leftIndex]==LINE_SENTENCE_END:
+                    for _ in range(leftIndex,i-WINDOW_PADDING-1,-1):
+                        chunk.insert(0,SENTENCE_DELIMITER)
+                    break
+                else:
+                    if wordList[leftIndex] not in inputTokenizer.word_index:
+                        chunk.insert(0,UNKNOWN_WORD)
+                    else:
+                        chunk.insert(0,wordList[leftIndex])
+
+            for rightIndex in range(i+1,i+WINDOW_PADDING+1):
+                if  rightIndex>len(wordList)-1 :
+                    chunk.append(SENTENCE_DELIMITER)
+                elif wordList[rightIndex]==LINE_SENTENCE_END:
+                    for _ in range(rightIndex,i+WINDOW_PADDING+1):
+                        chunk.append(SENTENCE_DELIMITER)
+                    break
+                else:
+                    if wordList[rightIndex] not in inputTokenizer.word_index:
+                        chunk.append(UNKNOWN_WORD)
+                    else:
+                        chunk.append(wordList[rightIndex])
+
+            chunks.append([chunk,clasificationsList[i]])
+            
+    return chunks
 
 languages = ["ned","esp"]
 
@@ -108,7 +170,7 @@ for language in languages:
     #################################
     #DEBUG
     #################################
-    fileTest = getFileLineList(languageFileDictionary[language]['test']);
+    fileTest = getFileLineList(languageFileDictionary[language]['development']);
     wordsTest = getWordList(fileTest)
     targetsTest = getClassificationList(fileTest)
     chunksTest = getInputChunks(wordsTest,targetsTest,inputTokenizer)
@@ -116,14 +178,24 @@ for language in languages:
     targetSequencesTest = getTargetSequences(chunksTest,targetTokenizer)
     targetSequencesTest = np_utils.to_categorical(targetSequencesTest, 9)
 
-    if False:
+    if True:
         target = open("DEBUG-INPUT", 'w')
         janelasTreino = numpy.array(chunks)[:,0]
         clasificacoesTreino = numpy.array(chunks)[:,1]
         #Averiguar as estruturas das windows
         for i in range(0,len(janelasTreino)):
             if clasificacoesTreino[i] != 'O':
-                target.write(janelasTreino[i][0]+"--"+clasificacoesTreino[i]+"--"+str(inputTokenizer.word_index[janelasTreino[i][0]])+"====>"+"("+str(inputSequences[i][0])+str(targetSequences[i])+ ")"  )
+                target.write("Chunks.Janela : "+ janelasTreino[i][0])
+                target.write("\n")
+                target.write("Chunks.Classificacao : "+ clasificacoesTreino[i])
+                target.write("\n")
+                target.write("Código no Tokenizer : "+str(inputTokenizer.word_index[janelasTreino[i][0]]))
+                target.write("\n")
+                target.write("Input na ANN : "+str(inputSequences[i][0]))
+                target.write("\n")
+                target.write("Output na ANN : "+str(targetSequences[i]))
+                target.write("\n")
+                #target.write(janelasTreino[i][0]+"--"+clasificacoesTreino[i]+"--"+str(inputTokenizer.word_index[janelasTreino[i][0]])+"====>"+"("+str(inputSequences[i][0])+str(targetSequences[i])+ ")"  )
                 target.write("\n")
 
         target.close()
@@ -155,14 +227,14 @@ for language in languages:
    
    
 
-    sequence_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-    embedded_sequences = Embedding(len(inputTokenizer.word_index) + 1, 500, input_length=MAX_SEQUENCE_LENGTH)(sequence_input)
-    x = Flatten()(embedded_sequences)
-    x = Dense(500, activation='relu')(x)
-    preds = Dense(len(targetTokenizer.word_index), activation='softmax')(x)
-    model = Model(sequence_input, preds)
-    model.compile(loss='categorical_crossentropy', optimizer='rmsprop',metrics=['fmeasure','precision','recall'])
-    model.summary()
+    #sequence_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
+    #embedded_sequences = Embedding(len(inputTokenizer.word_index) + 1, 500, input_length=MAX_SEQUENCE_LENGTH)(sequence_input)
+    #x = Flatten()(embedded_sequences)
+    #x = Dense(500, activation='relu')(x)
+    #preds = Dense(len(targetTokenizer.word_index), activation='softmax')(x)
+    #model = Model(sequence_input, preds)
+    #model.compile(loss='categorical_crossentropy', optimizer='rmsprop',metrics=['fmeasure','precision','recall'])
+    #model.summary()
 
     print "Tipo array input : "+str(type(inputSequences))
     print "Shape array input : "+str(inputSequences.shape)
@@ -170,4 +242,4 @@ for language in languages:
     print "Tipo array classes : "+str(type(targetSequences))
     print "Shape array classes : "+str(targetSequences.shape)
 
-    model.fit(inputSequences[:len(inputSequences)/3], targetSequences[:len(targetSequences)/3], batch_size=1024, nb_epoch=1, verbose=1, validation_data=(inputSequencesTest , targetSequencesTest), shuffle=True)       
+    model.fit(inputSequences[:len(inputSequences)]/1, targetSequences[:len(targetSequences)/1], batch_size=1024, nb_epoch=4, verbose=1, validation_data=(inputSequencesTest , targetSequencesTest), shuffle=True)       
